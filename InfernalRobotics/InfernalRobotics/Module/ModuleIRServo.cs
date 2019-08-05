@@ -57,6 +57,31 @@ namespace InfernalRobotics.Module
         [KSPField(isPersistant = false)]
         public float jointDamping = 0;
 
+        [KSPField(isPersistant = true, guiActive = false, guiActiveEditor = true, guiName = "Spring Power", guiFormat = "0.00"), 
+            UI_FloatEdit(minValue = 0.00f, maxValue = 5f, incrementSlide = 0.1f, incrementSmall=0.5f, incrementLarge=1f, scene = UI_Scene.Editor, sigFigs = 2)]
+        public float strutSpring = 0;
+        [KSPField(isPersistant = true, guiActive = false, guiActiveEditor = true, guiName = "Damping", guiFormat = "0.00"), 
+            UI_FloatEdit(minValue = 0.00f, maxValue = 5f, incrementSlide = 0.1f, incrementSmall=0.5f, incrementLarge=1f, scene = UI_Scene.Editor, sigFigs = 2)]
+        public float strutDamping = 0;
+
+        [KSPField(isPersistant = true)]
+        public string hardDamping = "False";
+
+        private bool hasHardDamping = false;
+
+        [KSPField(isPersistant = false, guiName = "ID", guiActive = false)]
+        public uint flight_id;
+
+        [KSPField(isPersistant = false, guiName = "Soft/Current Force", guiActive = false)]
+        public float currentSoftForce = 0f;
+        [KSPField(isPersistant = false, guiName = "Soft/Current Torque", guiActive = false)]
+        public float currentSoftTorque = 0f;
+
+        [KSPField(isPersistant = false, guiName = "Hard/Current Force", guiActive = false)]
+        public float currentHardForce = 0f;
+        [KSPField(isPersistant = false, guiName = "Hard/Current Torque", guiActive = false)]
+        public float currentHardTorque = 0f;
+
         bool isOnRails = true;
 
         [KSPField(isPersistant = true)] public bool rotateLimits = false;
@@ -136,6 +161,9 @@ namespace InfernalRobotics.Module
         protected ConfigurableJoint savedJoint;
         protected Rigidbody jointRigidBody;
 
+        protected SpringJoint strutJoint;
+        protected SpringJoint strutHvJoint;
+
         protected SoundSource motorSound;
         protected bool failedAttachment = false;
 
@@ -173,6 +201,8 @@ namespace InfernalRobotics.Module
         protected float lastRealPosition = 0f;
         public bool isStuck = false;
         protected float startPosition = 0f;
+        
+        public StrutManager StrutManager { get; set; }
 
         public ModuleIRServo()
         {
@@ -187,6 +217,7 @@ namespace InfernalRobotics.Module
             JointSetupDone = false;
             forwardKey = "";
             reverseKey = "";
+            StrutManager = new StrutManager();
 
             //motorSound = new SoundSource(this.part, "motor");
         }
@@ -233,6 +264,15 @@ namespace InfernalRobotics.Module
         {
             SetLock(!isMotionLock);
         }
+
+        [KSPEvent(guiActive = false, guiActiveEditor = true, guiName = "Hard Damping")]
+        public void HardDampingToggle()
+        {
+            hasHardDamping = !hasHardDamping;
+            Events["HardDampingToggle"].guiName = hasHardDamping ? "Soft Damping" : "Hard Damping";
+            hardDamping = hasHardDamping.ToString();
+        }
+        
         [KSPAction("Toggle Lock")]
         public void MotionLockToggle(KSPActionParam param)
         {
@@ -432,10 +472,13 @@ namespace InfernalRobotics.Module
             SetupMinMaxTweaks();
             ParsePresetPositions();
 
-            Translator.Init(isMotionLock, new Servo(this), Interpolator);
+            StrutManager.SetActuator(part);
+            Translator.Init(isMotionLock, new Servo(this), Interpolator, StrutManager.Move, StrutManager.Stop);
 
             GameEvents.onVesselGoOnRails.Add (OnVesselGoOnRails);
             GameEvents.onVesselGoOffRails.Add (OnVesselGoOffRails);
+            GameEvents.onVesselWasModified.Add (OnVesselWasModified);
+
 
             Logger.Log(string.Format("[OnAwake] End, rotateLimits={0}, minTweak={1}, maxTweak={2}, rotateJoint={0}", rotateLimits, minTweak, maxTweak), Logger.Level.Debug);
         }
@@ -444,8 +487,17 @@ namespace InfernalRobotics.Module
         {
             GameEvents.onVesselGoOnRails.Remove (OnVesselGoOnRails);
             GameEvents.onVesselGoOffRails.Remove (OnVesselGoOffRails);
+            GameEvents.onVesselGoOffRails.Remove (OnVesselWasModified);
         }
 
+        public void OnVesselWasModified(Vessel v)
+        {
+            if (v != vessel)
+                return;
+
+            StrutManager.OnVesselWasModified();
+        }
+        
         public void OnVesselGoOnRails (Vessel v)
         {
             if (v != vessel)
@@ -497,7 +549,12 @@ namespace InfernalRobotics.Module
             }
 
             SetupJoints ();
-
+            StrutManager.Init(strutSpring, strutDamping, hasHardDamping);
+//            if (hasHardDamping)
+//            {
+//                CreateHvStrut();
+//            }
+//            
             isOnRails = false;
         }
 
@@ -569,6 +626,9 @@ namespace InfernalRobotics.Module
             rotationDelta = rotation;
             translationDelta = translation;
 
+            hasHardDamping = hardDamping == "True";
+            Events["HardDampingToggle"].guiName = hasHardDamping ? "Soft Damping" : "Hard Damping";
+            
             InitModule();
 
             Logger.Log("[OnLoad] End", Logger.Level.Debug);
@@ -722,8 +782,8 @@ namespace InfernalRobotics.Module
         /// </summary>
         protected void FindTransforms()
         {
-            ModelTransform = part.transform.Find("model");
-            RotateModelTransform = ModelTransform.Find(rotateModel);
+            ModelTransform = part.transform.FindChild("model");
+            RotateModelTransform = ModelTransform.FindChild(rotateModel);
 
             FixedMeshTransform = KSPUtil.FindInPartModel(transform, fixedMesh);
         }
@@ -748,7 +808,7 @@ namespace InfernalRobotics.Module
             if (!float.IsNaN(Position))
                 Interpolator.Position = Position;
 
-            Translator.Init(isMotionLock, new Servo(this), Interpolator);
+            Translator.Init(isMotionLock, new Servo(this), Interpolator, StrutManager.Move, StrutManager.Stop);
 
             if (vessel == null) //or we can check for state==StartState.Editor
             {
@@ -783,6 +843,7 @@ namespace InfernalRobotics.Module
             //for some reason it was not necessary for legacy parts, but needed for rework parts.
             SetupMinMaxTweaks();
 
+            hasHardDamping = hardDamping == "True";
             Logger.Log("[MMT] OnStart End, rotateLimits=" + rotateLimits + ", minTweak=" + minTweak + ", maxTweak=" + maxTweak + ", rotateJoint = " + rotateJoint, Logger.Level.Debug);
         }
 
@@ -1504,6 +1565,12 @@ namespace InfernalRobotics.Module
                 UpdateJointSettings(currentTorque, currentSpring, currentDamping);*/
 
                 ConsumeElectricCharge();
+
+                currentHardForce = StrutManager.getCurrentHardForce();
+                currentHardTorque = StrutManager.getCurrentHardTorque();
+                currentSoftForce = StrutManager.getCurrentSoftForce();
+                currentSoftTorque = StrutManager.getCurrentSoftTorque();
+                flight_id = part.flightID;
             }
             
             if (vessel != null) //means flight mode as vessel is null in editor.
@@ -1541,7 +1608,36 @@ namespace InfernalRobotics.Module
             }
         }
 
-
+ 
+//        public void CreateStrutCallback()
+//        {
+//            if (!HighLogic.LoadedSceneIsFlight || strutSpring < 0.01f)
+//            {
+//                return;
+//            }
+//            CreateStrut();
+//            if (hasHardDamping)
+//            {
+//                CreateHvStrut();
+//            }
+//            CreateStrutsInChildren(part.children);
+//        }
+//        
+//
+//        public void DestroyStrutCallback()
+//        {
+//            DestroyStrut();
+//            Logger.Log($"DestroyCallback; strut={strutJoint}, hvStrut={strutHvJoint}, hasHardDamping={hasHardDamping}");
+//
+//            if (hasHardDamping)
+//            {
+//                DestroyHvStrut();
+//            }
+//            DestroyStrutsInChildren(part.children);
+//        }
+        
+       
+        
         public void SetLock(bool isLocked)
         {
             if(!isLocked && failedAttachment)
@@ -1560,8 +1656,9 @@ namespace InfernalRobotics.Module
             Translator.IsMotionLock = isMotionLock;
 
             if (isMotionLock)
+            {
                 Translator.Stop();
-
+            }
         }
 
 
