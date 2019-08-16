@@ -478,6 +478,8 @@ namespace InfernalRobotics.Module
             GameEvents.onVesselGoOnRails.Add (OnVesselGoOnRails);
             GameEvents.onVesselGoOffRails.Add (OnVesselGoOffRails);
             GameEvents.onVesselWasModified.Add (OnVesselWasModified);
+            GameEvents.onPartDie.Add (OnPartDie);
+
 
 
             Logger.Log(string.Format("[OnAwake] End, rotateLimits={0}, minTweak={1}, maxTweak={2}, rotateJoint={0}", rotateLimits, minTweak, maxTweak), Logger.Level.Debug);
@@ -488,8 +490,18 @@ namespace InfernalRobotics.Module
             GameEvents.onVesselGoOnRails.Remove (OnVesselGoOnRails);
             GameEvents.onVesselGoOffRails.Remove (OnVesselGoOffRails);
             GameEvents.onVesselGoOffRails.Remove (OnVesselWasModified);
+            GameEvents.onPartDie.Remove(OnPartDie);
         }
 
+        public void OnPartDie(Part p)
+        {
+            if (p != part)
+            {
+                return;
+            }
+            StrutManager.OnPartDie();
+        }
+        
         public void OnVesselWasModified(Vessel v)
         {
             if (v != vessel)
