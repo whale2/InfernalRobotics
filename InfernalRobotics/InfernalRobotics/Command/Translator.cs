@@ -29,6 +29,7 @@ namespace InfernalRobotics.Command
             this.interpolator = interpolator;
             onStop = onstop;
             beforeStart = beforestart;
+            this.interpolator.SetOnComplete(OnInterpolatorComplete);
         }
 
         private IServo servo;
@@ -75,10 +76,7 @@ namespace InfernalRobotics.Command
 
         public void MoveIncremental(float posDelta, float speed)
         {
-            if (beforeStart != null)
-            {
-                beforeStart();
-            }
+            beforeStart?.Invoke();
             if (!interpolator.Active)
                 servo.Mechanism.Reconfigure();
 
@@ -89,7 +87,7 @@ namespace InfernalRobotics.Command
         public void Stop()
         {
             Move(0, 0);
-            if (onStop != null)
+            if (onStop != null && !IsMoving())
             {
                 onStop();
             }
@@ -100,6 +98,12 @@ namespace InfernalRobotics.Command
             return interpolator.Active && (interpolator.CmdVelocity != 0f);
         }
 
+        public void OnInterpolatorComplete()
+        {
+            Logger.Log("[Translator] got OnComplete", Logger.Level.SuperVerbose);
+            onStop?.Invoke();
+        }
+        
         public float ToInternalPos(float externalPos)
         {
             if (servo.Motor.IsAxisInverted)

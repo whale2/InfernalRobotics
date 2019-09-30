@@ -217,7 +217,7 @@ namespace InfernalRobotics.Module
             JointSetupDone = false;
             forwardKey = "";
             reverseKey = "";
-            StrutManager = new StrutManager();
+            StrutManager = new StrutManager(this);
 
             //motorSound = new SoundSource(this.part, "motor");
         }
@@ -473,7 +473,9 @@ namespace InfernalRobotics.Module
             ParsePresetPositions();
 
             StrutManager.SetActuator(part);
-            Translator.Init(isMotionLock, new Servo(this), Interpolator, StrutManager.Move, StrutManager.Stop);
+            Translator.Init(
+                isMotionLock, new Servo(this), Interpolator,
+                StrutManager.MessageProcessor.MoveReceived, StrutManager.MessageProcessor.StopReceived);
 
             GameEvents.onVesselGoOnRails.Add (OnVesselGoOnRails);
             GameEvents.onVesselGoOffRails.Add (OnVesselGoOffRails);
@@ -549,10 +551,26 @@ namespace InfernalRobotics.Module
 
             JointSetupDone = false;
 
-            Logger.Log ("[OnVesselGoOffRails] Started for "+ part.name, Logger.Level.Debug);
+            try
+            {
+                Logger.Log("[OnVesselGoOffRails] Started for " + part?.name, Logger.Level.Debug);
 
-            Logger.Log ("[OnVesselGoOffRails] Rebuilding Attachments", Logger.Level.Debug);
-            BuildAttachments ();
+                Logger.Log("[OnVesselGoOffRails] Rebuilding Attachments", Logger.Level.Debug);
+            }
+            catch (NullReferenceException)
+            {
+                Logger.Log("[OnVesselGoOffRails] got nullref in part.name", Logger.Level.Debug);
+            }
+
+            try
+            {
+                BuildAttachments();
+            }
+            catch (NullReferenceException)
+            {
+                Logger.Log("[OnVesselGoOffRails] got nullref in BuildAttachments", Logger.Level.Debug);
+            }
+
 
             if (joint) 
             {
@@ -560,8 +578,24 @@ namespace InfernalRobotics.Module
                 DestroyImmediate (joint);
             }
 
-            SetupJoints ();
-            StrutManager.Init(strutSpring, strutDamping, hasHardDamping);
+            try
+            {
+                SetupJoints();
+            }
+            catch (NullReferenceException)
+            {
+                Logger.Log("[OnVesselGoOffRails] got nullref in SetupJoints", Logger.Level.Debug);
+            }
+
+            try
+            {
+                StrutManager.Init(strutSpring, strutDamping, hasHardDamping);
+            }
+            catch (NullReferenceException)
+            {
+                Logger.Log("[OnVesselGoOffRails] got nullref in StrutManager", Logger.Level.Debug);
+            }
+
 //            if (hasHardDamping)
 //            {
 //                CreateHvStrut();
@@ -794,8 +828,8 @@ namespace InfernalRobotics.Module
         /// </summary>
         protected void FindTransforms()
         {
-            ModelTransform = part.transform.FindChild("model");
-            RotateModelTransform = ModelTransform.FindChild(rotateModel);
+            ModelTransform = part.transform.Find("model");
+            RotateModelTransform = ModelTransform.Find(rotateModel);
 
             FixedMeshTransform = KSPUtil.FindInPartModel(transform, fixedMesh);
         }
@@ -820,7 +854,9 @@ namespace InfernalRobotics.Module
             if (!float.IsNaN(Position))
                 Interpolator.Position = Position;
 
-            Translator.Init(isMotionLock, new Servo(this), Interpolator, StrutManager.Move, StrutManager.Stop);
+            Translator.Init(isMotionLock, new Servo(this), Interpolator, 
+                StrutManager.MessageProcessor.MoveReceived, 
+                StrutManager.MessageProcessor.StopReceived);
 
             if (vessel == null) //or we can check for state==StartState.Editor
             {

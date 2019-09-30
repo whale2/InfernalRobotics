@@ -53,7 +53,15 @@ namespace InfernalRobotics.Command
         private const float precisionDelta = 0.001f;
 
         #endregion config
+        
+        public delegate void OnComplete();
+        private OnComplete onComplete;
 
+        public void SetOnComplete(OnComplete oncomplete)
+        {
+            onComplete = oncomplete;
+        }
+        
         public float GetPosition()
         {
             return ReduceModulo(Position);
@@ -129,6 +137,7 @@ namespace InfernalRobotics.Command
                 Active = false;
                 Velocity = 0;
                 Logger.Log(string.Format("[Interpolator] finished! pos={0}, target={1}", Position, targetPos), Logger.Level.SuperVerbose);
+                onComplete?.Invoke();
                 return;
             }
 

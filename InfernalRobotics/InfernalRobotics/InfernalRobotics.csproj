@@ -57,6 +57,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="API\IRWrapper.cs" />
+    <Compile Include="Command\MessageProcessor.cs" />
     <Compile Include="Command\ServoController.cs" />
     <Compile Include="Command\Interpolator.cs" />
     <Compile Include="Command\StrutManager.cs" />
