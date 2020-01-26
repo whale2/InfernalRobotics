@@ -1541,9 +1541,11 @@ namespace InfernalRobotics.Module
             if (Math.Abs(lastPosition - this.Position) >= 0.005)
             {
                 part.SendMessage("UpdateShapeWithAnims");
+                part.SendMessage("GeometryPartModuleRebuildMeshData");
                 foreach (var p in part.children)
                 {
                     p.SendMessage("UpdateShapeWithAnims");
+                    p.SendMessage("GeometryPartModuleRebuildMeshData");
                 }
 
                 lastPosition = this.Position;
@@ -1614,11 +1616,13 @@ namespace InfernalRobotics.Module
 
                 ConsumeElectricCharge();
 
-                currentHardForce = StrutManager.getCurrentHardForce();
-                currentHardTorque = StrutManager.getCurrentHardTorque();
-                currentSoftForce = StrutManager.getCurrentSoftForce();
-                currentSoftTorque = StrutManager.getCurrentSoftTorque();
+                currentHardForce = StrutManager.GetCurrentHardForce();
+                currentHardTorque = StrutManager.GetCurrentHardTorque();
+                currentSoftForce = StrutManager.GetCurrentSoftForce();
+                currentSoftTorque = StrutManager.GetCurrentSoftTorque();
                 flight_id = part.flightID;
+                
+                StrutManager.LRDraw();
             }
             
             if (vessel != null) //means flight mode as vessel is null in editor.
@@ -1640,12 +1644,13 @@ namespace InfernalRobotics.Module
             {
                 if (Interpolator.Active && !freeMoving)
                 {
-                    float amountToConsume = electricChargeRequired * TimeWarp.fixedDeltaTime;
+                    float speedModifier = speedTweak > 1 ? speedTweak : 1;
+                    float amountToConsume = electricChargeRequired * TimeWarp.fixedDeltaTime * speedModifier;
 
                     if (UseTorque)
                         amountToConsume = torqueTweak / torqueMax * amountToConsume;
 
-                    part.RequestResource(ELECTRIC_CHARGE_RESOURCE_NAME, amountToConsume);
+                    part.RequestResource(ELECTRIC_CHARGE_RESOURCE_NAME, (double)amountToConsume);
 
                     LastPowerDrawRate = amountToConsume/TimeWarp.fixedDeltaTime;
                 }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using InfernalRobotics.Module;
 using UnityEngine;
 using Object = UnityEngine.Object;
@@ -14,17 +15,21 @@ namespace InfernalRobotics.Command
     {
         public static readonly string muMechToggle = "MuMechToggle";
 
+        private bool drawStruts = false;
+        
         private ModuleIRServo module;
         
         private float strutSpring;
         private float strutDamping;
         public bool hasHvDamping;
 
-        private SpringJoint strutJoint;
-        private SpringJoint strutHvJoint;
+        private List<SpringJoint> strutJoint = new List<SpringJoint>();
+        private List<SpringJoint> strutHvJoint = new List<SpringJoint>();
+
+        private Dictionary<int, GameObject> LRs = new Dictionary<int, GameObject>();
 
         public Part actuator;
-        private Part strutStart;
+        private List<Part> strutStart = new List<Part>();
         private Part strutEnd;
         private Part hvPart;
         
@@ -77,7 +82,7 @@ namespace InfernalRobotics.Command
             InitHvStrut();
             
             Logger.Log(
-                $"StrutManager({actuator.flightID}): initialized; strut={strutJoint}, neighbors={MessageProcessor.neighbors.Count}");
+                $"StrutManager({actuator.flightID}): initialized; # struts={strutJoint.Count}, neighbors={MessageProcessor.neighbors.Count}");
          }
 
         private void InitStrut()
@@ -88,8 +93,8 @@ namespace InfernalRobotics.Command
             strutEnd = null;
             if (canCreateStrut)
             {
-                strutStart = FindUpwardNonIRPart(actuator.parent);
-                strutEnd = FindClosestNonIRPart(actuator);
+                strutStart = FindClosestNonIRParts(actuator);
+                strutEnd = FindDownwardNonIRPart(actuator.parent);
                 canCreateStrut = strutStart != null && strutEnd != null;
             }
 
@@ -99,14 +104,14 @@ namespace InfernalRobotics.Command
             }
             CreateStrut(true);
             Logger.Log(
-                $"StrutManager({actuator.flightID}): InitStrut: canCreate={canCreateStrut}; start={strutStart?.name}, end={strutEnd?.name}");
+                $"StrutManager({actuator.flightID}): InitStrut: canCreate={canCreateStrut}; # parts={strutStart?.Count}, end={strutEnd?.name}");
         }
 
         private void InitHvStrut()
         {
-            if (strutEnd == null)
+            if (strutStart == null)
             {
-                strutEnd = FindClosestNonIRPart(actuator);
+                strutStart = FindClosestNonIRParts(actuator);
             }
             canCreateHvStrut = hasHvDamping && strutEnd != null;
             
@@ -128,25 +133,39 @@ namespace InfernalRobotics.Command
         
         public void OnVesselWasModified()
         {
+            if (!HighLogic.LoadedSceneIsFlight)
+            {
+                return;
+            }
             // something has changed
             // destroy old strut, try to create new strut
             Logger.Log($"StrutManager({actuator.flightID}): vessel modified");
             
             MessageProcessor.FindNeighbors(actuator);
-            Logger.Log($"StrutManager({actuator.flightID}): vessel modified; start.v={strutStart?.vessel.name}, end.v={strutEnd?.vessel.name}, hv.v={hvPart?.vessel.name}");
+            //Logger.Log($"StrutManager({actuator.flightID}): vessel modified; start.v={strutEnd?.vessel.name}, end.v={strutEnd?.vessel.name}, hv.v={hvPart?.vessel.name}");
 
-            if (strutActive && (strutStart?.vessel != actuator.vessel || strutEnd?.vessel != actuator.vessel))
+            for (int i = 0; i < strutJoint.Count; i++)
             {
-                Logger.Log($"StrutManager({actuator.flightID}): vessel modified; start.v={strutStart?.vessel.name}, end.v={strutEnd?.vessel.name}, destroying strut");
-                DestroyStrut();
-                actuator.StartCoroutine(WaitAndCreateStrut());
+                Part startPart = strutJoint[i].gameObject.GetComponent<Part>();
+                if (strutActive && (startPart.vessel != actuator.vessel || strutEnd?.vessel != actuator.vessel))
+                {
+                    Logger.Log(
+                        $"StrutManager({actuator.flightID}): vessel modified; start.v={startPart?.vessel.name}, end.v={strutEnd?.vessel.name}, destroying strut");
+                    DestroyStrut();
+                    actuator.StartCoroutine(WaitAndCreateStrut());
+                }
             }
 
-            if (hvStrutActive && (strutEnd?.vessel != actuator.vessel || hvPart?.vessel != actuator.vessel))
+            for (int i = 0; i < strutHvJoint.Count; i++)
             {
-                Logger.Log($"StrutManager({actuator.flightID}): vessel modified; hv.v={hvPart?.vessel}, end.v={strutEnd?.vessel}, destroying hv strut");
-                DestroyHvStrut();
-                actuator.StartCoroutine(WaitAndCreateHvStrut());
+                Part startPart = strutHvJoint[i].gameObject.GetComponent<Part>();
+                if (hvStrutActive && (startPart?.vessel != actuator.vessel || hvPart?.vessel != actuator.vessel))
+                {
+                    Logger.Log(
+                        $"StrutManager({actuator.flightID}): vessel modified; hv.v={hvPart?.vessel}, end.v={startPart?.vessel}, destroying hv strut");
+                    DestroyHvStrut();
+                    actuator.StartCoroutine(WaitAndCreateHvStrut());
+                }
             }
         }
 
@@ -171,7 +190,7 @@ namespace InfernalRobotics.Command
             }
 
             Logger.Log(
-                $"StrutManager({actuator.flightID}): -> got move; hv={hvStrutActive}; hvStrut={strutHvJoint}; dropSoft={dropSoftStrut}");
+                $"StrutManager({actuator.flightID}): -> got move; hv={hvStrutActive}; hvStrut={strutHvJoint.Count}; dropSoft={dropSoftStrut}");
             if (strutActive && dropSoftStrut)
             {
                 creating = false;
@@ -198,8 +217,13 @@ namespace InfernalRobotics.Command
                 if (destroying)
                 {
                     destroying = false;
-                    Object.Destroy(strutJoint);
-                    strutJoint = null;
+                    for (int i = 0; i < strutJoint.Count; i++)
+                    {
+                        Object.Destroy(strutJoint[i]);
+                    }
+
+                    strutJoint.Clear();
+                    LRDestroy();;
                 }
 
                 _CreateStrut(false);
@@ -210,14 +234,50 @@ namespace InfernalRobotics.Command
                 if (destroyingHv)
                 {
                     destroyingHv = false;
-                    Object.Destroy(strutHvJoint);
-                    strutHvJoint = null;
+                    for (int i = 0; i < strutHvJoint.Count; i++)
+                    {
+                        Object.Destroy(strutHvJoint[i]);
+                    }
+                    strutHvJoint.Clear();
                 }
                 
                 _CreateHvStrut(false);
             }
         }
 
+        private void SetJointDistance(Part from, Part to, SpringJoint joint, float delta = 0.2f)
+        {
+            float distance = 0f;
+            //Vector3.Distance(
+                //to.transform.InverseTransformPoint(to.rb.centerOfMass),
+                //from.transform.InverseTransformPoint(from.rb.centerOfMass));
+            //Logger.Log($"StrutManager({actuator.flightID}): ({from.transform.InverseTransformPoint(from.rb.centerOfMass)}) -> ({to.transform.InverseTransformPoint(to.rb.centerOfMass)}) distance={distance}");
+
+            joint.minDistance = distance - delta;
+            joint.maxDistance = distance + delta;
+            joint.tolerance = 0.01f;
+            //joint.anchor = from.rb.centerOfMass;
+            //joint.connectedAnchor = to.rb.centerOfMass;
+        }
+
+        private SpringJoint ConfigureJoint(Part from, Part to, float damping)
+        {
+            SpringJoint joint = from.gameObject.AddComponent<SpringJoint>();
+            joint.damper = damping;
+            joint.spring = 1f;
+
+            SetJointDistance(from, to, joint);
+
+            joint.autoConfigureConnectedAnchor = true;
+            joint.connectedBody = to.rb;
+            joint.breakForce = actuator.breakingForce;
+            joint.breakTorque = actuator.breakingTorque;
+            joint.axis = Vector3.one;
+            joint.enablePreprocessing = true;
+
+            return joint;
+        }
+        
         public void CreateStrut(bool immediate)
         {
             if (!HighLogic.LoadedSceneIsFlight || !canCreateStrut)
@@ -230,27 +290,23 @@ namespace InfernalRobotics.Command
         
         private void _CreateStrut(bool immediate)
         {
-            // Create strut between parts on both ends of the joint
-            if (strutJoint != null)
+            if (creating || strutJoint.Count > 0)
             {
                 return;
             }
-            
-            Logger.Log($"StrutManager({actuator.flightID}): Adding soft strut between {strutStart.name} and {strutEnd.name}");
+            // Create strut between parts on both ends of the joint
+            LRDestroy();
+            strutJoint.Clear();
+            for (int i = 0; i < strutStart.Count; i++)
+            {
+                Logger.Log(
+                    $"StrutManager({actuator.flightID}): Adding soft strut between {strutStart[i].name} ({strutStart[i].flightID}) and {strutEnd.name}");
 
-            strutJoint = strutStart.gameObject.AddComponent<SpringJoint>();
-            strutJoint.damper = actuator.breakingForce / 2 * strutDamping;
-            strutJoint.spring = 1f;
-            strutJoint.minDistance = 0.01f;
-            strutJoint.maxDistance = 0.01f;
-            strutJoint.tolerance = 0.01f;
+                SpringJoint joint = ConfigureJoint(strutStart[i], strutEnd, actuator.breakingForce / 2 * strutDamping); 
+                strutJoint.Add(joint);
+            }
 
-            strutJoint.connectedBody = strutEnd.GetComponent<Rigidbody>();
-            strutJoint.breakForce = actuator.breakingForce;
-            strutJoint.breakTorque = actuator.breakingTorque;
-            strutJoint.autoConfigureConnectedAnchor = true;
-            strutJoint.axis = Vector3.one;
-            
+            LRDraw();
             destroying = false;
             creating = true;
             
@@ -266,7 +322,7 @@ namespace InfernalRobotics.Command
             Logger.Log($"StrutManager({actuator.flightID}): Looking for heaviest for {strutEnd.name}");
             try
             {
-                hvPart = getHvPartInStage();
+                hvPart = GetHvPartInStage();
                 if (hvPart == actuator)
                 {
                     Logger.Log($"StrutManager({actuator.flightID}): Heaviest part is actuator; falling back to root part {actuator.vessel.rootPart.name}");
@@ -285,25 +341,20 @@ namespace InfernalRobotics.Command
         }
         private void _CreateHvStrut(bool immediate) {
 
-            if (strutHvJoint != null || strutEnd == null || hvPart == null)
+            if (strutEnd == null || hvPart == null || creatingHv || strutHvJoint.Count > 0)
             {
                 return;
             }
 
-            Logger.Log($"StrutManager({actuator.flightID}): Adding Hard strut between {strutEnd.name} and {hvPart.name}");
+            strutHvJoint.Clear();
+            for (int i = 0; i < strutStart.Count; i++)
+            {
+                Logger.Log(
+                    $"StrutManager({actuator.flightID}): Adding Hard strut between {strutStart[i].name} ({strutStart[i].flightID}) and {hvPart.name}");
 
-            strutHvJoint = strutEnd.gameObject.AddComponent<SpringJoint>();
-            strutHvJoint.damper = actuator.breakingForce / 8 * strutDamping;
-            strutHvJoint.spring = 1f;
-            strutHvJoint.minDistance = 0.05f;
-            strutHvJoint.maxDistance = 0.05f;
-            strutHvJoint.tolerance = 0.05f;
-
-            strutHvJoint.connectedBody = hvPart.GetComponent<Rigidbody>();
-            strutHvJoint.breakForce = actuator.breakingForce;
-            strutHvJoint.breakTorque = actuator.breakingTorque;
-            strutHvJoint.autoConfigureConnectedAnchor = true;
-            strutHvJoint.axis = Vector3.one;
+                SpringJoint joint = ConfigureJoint(strutStart[i], hvPart, actuator.breakingForce / 8 * strutDamping);
+                strutHvJoint.Add(joint);
+            }
 
             destroyingHv = false;
             creatingHv = true;
@@ -319,7 +370,9 @@ namespace InfernalRobotics.Command
         
         public void _DestroyStrut()
         {
-            if (!HighLogic.LoadedSceneIsFlight || strutJoint == null)
+            Logger.Log(
+                $"StrutManager({actuator.flightID}): soft joint count={strutJoint.Count}; destroying={destroying}");
+            if (!HighLogic.LoadedSceneIsFlight || strutJoint.Count == 0)
             {
                 return;
             }
@@ -341,7 +394,7 @@ namespace InfernalRobotics.Command
         
         private void _DestroyHvStrut()
         {
-            if (!HighLogic.LoadedSceneIsFlight || strutHvJoint == null)
+            if (!HighLogic.LoadedSceneIsFlight || strutHvJoint.Count == 0)
             {
                 return;
             }
@@ -359,56 +412,86 @@ namespace InfernalRobotics.Command
         {
             while (destroying)
             {
-                if (strutJoint.spring > 1f)
+                int nLoosened = 0;
+                for (int i = 0; i < strutJoint.Count; i++)
                 {
-                    strutJoint.spring -= springForce / 10;
+                    nLoosened += _LooseSingleStrut(strutJoint[i]);
+                }
+                
+                if (nLoosened > 0) 
+                {
                     yield return new WaitForFixedUpdate();
                 }
                 else
                 {
-                    Logger.Log($"StrutManager({actuator.flightID}): Destroying soft strut {strutJoint}");
-                    Object.Destroy(strutJoint);
-                    strutJoint = null;
+                    strutJoint.Clear();
                     destroying = false;
+                    LRDestroy();
                     yield break;
                 }
             }
         }
-        
+
+        private int _LooseSingleStrut(SpringJoint strut)
+        {
+            if (strut.spring > 1f)
+            {
+                strut.spring -= springForce / 10;
+                return 1;
+            }
+
+            Logger.Log($"StrutManager({actuator.flightID}): Destroying strut {strut}");
+            Object.Destroy(strut);
+            return 0;
+        }
         
         private IEnumerator LooseHvStrut()
         {
             while (destroyingHv)
             {
-                if (strutHvJoint.spring > 1f)
+                int nLoosened = 0;
+                for (int i = 0; i < strutHvJoint.Count; i++)
                 {
-                    strutHvJoint.spring -= springForce / 10;
+                    nLoosened += _LooseSingleStrut(strutHvJoint[i]);
+                }
+                
+                if (nLoosened > 0) 
+                {
                     yield return new WaitForFixedUpdate();
                 }
                 else
                 {
-                    Logger.Log($"StrutManager({actuator.flightID}): Destroying Hard strut {strutHvJoint}");
-                    Object.Destroy(strutHvJoint);
-                    strutHvJoint= null;
+                    strutHvJoint.Clear();
                     destroyingHv = false;
                     yield break;
                 }
             }
         }
-        
+
+        private int _TightenStrut(SpringJoint strut)
+        {
+            if (strut.spring < springForce)
+            {
+                strut.spring += springForce / 50;
+                return 1;
+            }
+            return 0;
+        }
         private IEnumerator TightenStrut(bool immediate)
         {
             if (immediate)
             {
-                strutJoint.spring = springForce;
+                for (int i = 0; i < strutJoint.Count; i++)
+                {
+                    strutJoint[i].spring = springForce;
+                }
+                Logger.Log($"StrutManager({actuator.flightID}): set force={springForce} on all struts");
+                creating = false;
                 yield break;
             }
             
             while (creating)
             {
-                float pos = module.rotateJoint ? module.rotation : module.translation;
-                Logger.Log($"StrutManager({actuator.flightID}): pos = {pos}; waiting for interpolator (active={module.Interpolator.Active})");
-
                 if (module.Interpolator.Active)
                 {
                     if (!creating)
@@ -418,27 +501,32 @@ namespace InfernalRobotics.Command
                     yield return new WaitForFixedUpdate();
                 }
 
-                if (strutJoint.spring < springForce)
+                int nTightened = 0;
+                for (int i = 0; i < strutJoint.Count; i++)
+                {
+                    nTightened += _TightenStrut(strutJoint[i]);
+                }
+
+                if (nTightened > 0)
                 {
                     if (!creating)
                     {
                         yield break;
                     }
-                    strutJoint.spring += springForce / 50;
                     yield return new WaitForFixedUpdate();
                 }
-                
-                if (!creating)
+                else
                 {
+                    Logger.Log($"StrutManager({actuator.flightID}): Setting new soft strut tolerance after tightening");
+                    for (int i = 0; i < strutJoint.Count; i ++)
+                    {
+                        Part to = strutJoint[i].connectedBody.gameObject.GetComponent<Part>();
+                        Part from = strutJoint[i].gameObject.GetComponent<Part>();
+                        SetJointDistance(from, to, strutJoint[i], 0.02f);
+                    }
+                    creating = false;
                     yield break;
                 }
-                Logger.Log($"StrutManager({actuator.flightID}): Re-creating soft strut {strutJoint}");
-                Object.Destroy(strutJoint);
-                strutJoint = null;
-                _CreateStrut(true);
-                Logger.Log($"StrutManager({actuator.flightID}): Created soft strut {strutJoint}");
-                creating = false;
-                yield break;
             }
         }
 
@@ -446,70 +534,82 @@ namespace InfernalRobotics.Command
         {
             if (immediate)
             {
-                strutHvJoint.spring = springForce;
+                for (int i = 0; i < strutHvJoint.Count; i++)
+                {
+                    strutHvJoint[i].spring = springForce;
+                }
+                Logger.Log($"StrutManager({actuator.flightID}): set force={springForce} on all hvStruts");
+                creatingHv = false;
                 yield break;
             }
+            
             while (creatingHv)
             {
                 if (module.Interpolator.Active)
                 {
-                    if (!creatingHv)
+                    if (!creating)
                     {
                         yield break;
                     }
                     yield return new WaitForFixedUpdate();
                 }
-                
-                if (strutHvJoint.spring < springForce)
+
+                int nTightened = 0;
+                for (int i = 0; i < strutHvJoint.Count; i++)
                 {
-                    if (!creatingHv)
+                    nTightened += _TightenStrut(strutHvJoint[i]);
+                }
+
+                if (nTightened > 0)
+                {
+                    if (!creating)
                     {
                         yield break;
                     }
-                    strutHvJoint.spring += springForce / 50;
                     yield return new WaitForFixedUpdate();
                 }
-                
-                if (!creatingHv)
+                else
                 {
+                    Logger.Log($"StrutManager({actuator.flightID}): Setting new hard strut tolerance after tightening");
+                    for (int i = 0; i < strutHvJoint.Count; i ++)
+                    {
+                        Part to = strutHvJoint[i].connectedBody.gameObject.GetComponent<Part>();
+                        Part from = strutHvJoint[i].gameObject.GetComponent<Part>();
+                        SetJointDistance(from, to, strutHvJoint[i], 0.02f);
+                    }
+                    creatingHv = false;
                     yield break;
                 }
-                Logger.Log($"StrutManager({actuator.flightID}): Re-creating hard strut {strutHvJoint}");
-                Object.Destroy(strutHvJoint);
-                strutHvJoint = null;
-                _CreateHvStrut(true);
-                Logger.Log($"StrutManager({actuator.flightID}): Created hard strut {strutHvJoint}");
-                creatingHv = false;
-                yield break;
             }
         }
+
         
- 
-        
-        public Part FindClosestNonIRPart(Part start)
+        // ReSharper disable once InconsistentNaming
+        public List<Part> FindClosestNonIRParts(Part start)
         {
-            if (start?.children == null)
+            if (start == null || start?.children.Count == 0)
             {
                 return null;
             }
+
+            List<Part> closestParts = new List<Part>();
             foreach (Part p in start.children)
             {
                 if (!p.Modules.Contains(muMechToggle))
                 {
                     Logger.Log($"StrutManager({actuator.flightID}): upward non-IR part: {p}");
-                    return p;
+                    closestParts.Add(p);
                 }
-
-                Part deepPart = FindClosestNonIRPart(p);
-                if (deepPart != null)
+                else
                 {
-                    return deepPart;
+                    closestParts.AddRange(FindClosestNonIRParts(p));
                 }
             }
-            return null;
+            return closestParts;
         }
 
-        public Part FindUpwardNonIRPart(Part start)
+        // ReSharper disable once InconsistentNaming
+        public Part FindDownwardNonIRPart(Part start)
         {
             if (start == null)
             {
@@ -518,14 +618,14 @@ namespace InfernalRobotics.Command
 
             if (start.Modules.Contains(muMechToggle))
             {
-                return FindUpwardNonIRPart(start.parent);
+                return FindDownwardNonIRPart(start.parent);
             }
 
             Logger.Log($"StrutManager({actuator.flightID}): downward non-IR part: {start}");
             return start;
         }
 
-        public Part getHvPartInStage()
+        public Part GetHvPartInStage()
         {
             float maxMass = 0f;
             Part hv = null;
@@ -543,27 +643,118 @@ namespace InfernalRobotics.Command
                 }
             }
 
-            Logger.Log($"StrutManager({actuator.flightID}):  heavisest part in inv stage {actuator.inverseStage}: {hv.name} ({maxMass})");
+            Logger.Log($"StrutManager({actuator.flightID}):  heavisest part in inv stage {actuator.inverseStage}: {hv?.name} ({maxMass})");
             return hv;
         }
 
-        public float getCurrentSoftForce()
+        public float GetCurrentSoftForce()
         {
-            return strutJoint == null ? 0f : strutJoint.currentForce.magnitude;
+            return strutJoint.Count == 0 || strutJoint[0] == null ? 0f : strutJoint[0].currentForce.magnitude;
         }
 
-        public float getCurrentSoftTorque()
+        public float GetCurrentSoftTorque()
         {
-            return strutJoint == null ? 0f : strutJoint.currentTorque.magnitude;
+            return strutJoint.Count == 0 || strutJoint[0] == null  ? 0f : strutJoint[0].currentTorque.magnitude;
         }
         
-        public float getCurrentHardForce()
+        public float GetCurrentHardForce()
         {
-            return strutHvJoint == null ? 0f : strutHvJoint.currentForce.magnitude;
+            return strutHvJoint.Count == 0  || strutHvJoint[0] == null ? 0f : strutHvJoint[0].currentForce.magnitude;
         }
-        public float getCurrentHardTorque()
+        public float GetCurrentHardTorque()
         {
-            return strutHvJoint == null ? 0f : strutHvJoint.currentTorque.magnitude;
+            return strutHvJoint.Count == 0  || strutHvJoint[0] == null ? 0f : strutHvJoint[0].currentTorque.magnitude;
+        }
+        
+        internal void LRDraw()
+        {
+            if (!drawStruts)
+            {
+                return;
+            }
+            LineRenderer lr;
+
+            for (int i = 0; i < strutJoint.Count; i ++)
+            {
+                SpringJoint j = strutJoint[i];
+                int id = j.GetInstanceID();
+
+                if (LRs.ContainsKey(id))
+                {
+                    lr = LRs[id].GetComponent<LineRenderer>();
+                }
+                else
+                {
+                    GameObject go = new GameObject(id.ToString());
+                    Part p = j.gameObject.GetComponent<Part>();
+
+                    Logger.Log($"StrutManager({actuator.flightID}): adding GO to strut id={id}; part: {p}; connected: {j.connectedBody.gameObject.GetComponent<Part>()}");
+                    Logger.Log($"StrutManager({actuator.flightID}): LR->WS({j.transform.TransformPoint(j.anchor)}) ({j.connectedBody.transform.TransformPoint(j.connectedAnchor)})");
+                    Logger.Log($"StrutManager({actuator.flightID}): LR->LS({j.anchor})");
+
+                    Logger.Log($"StrutManager({actuator.flightID}): local transform: {j.transform.position}; connected local: {j.connectedBody.transform.position}");
+
+
+                    lr = go.AddComponent<LineRenderer>();
+                    lr.positionCount = 2;
+                    lr.startColor = Color.red;
+                    lr.endColor = lr.startColor;
+                    lr.startWidth = 0.03f;
+                    lr.endWidth = 0.03f;
+                    lr.useWorldSpace = true;
+                    lr.material = new Material(Shader.Find("Particles/Additive"));
+                    LRs[id] = go;
+                }
+
+                lr.SetPosition(0, j.transform.TransformPoint(j.anchor));
+                lr.SetPosition(1, j.connectedBody.transform.TransformPoint(j.connectedAnchor));
+                //lr.SetPosition(1, j.connectedBody.transform.position);
+            }
+            
+            for (int i = 0; i < strutHvJoint.Count; i ++)
+            {
+                SpringJoint j = strutHvJoint[i];
+                int id = j.GetInstanceID();
+
+                if (LRs.ContainsKey(id))
+                {
+                    lr = LRs[id].GetComponent<LineRenderer>();
+                }
+                else
+                {
+                    GameObject go = new GameObject(id.ToString());
+                    Part p = j.gameObject.GetComponent<Part>();
+
+                    // Logger.Log($"StrutManager({actuator.flightID}): adding GO to strut id={id}; part: {p}; connected: {j.connectedBody.gameObject.GetComponent<Part>()}");
+                    // Logger.Log($"StrutManager({actuator.flightID}): LR->WS({j.transform.TransformPoint(j.anchor)}) ({j.connectedBody.transform.TransformPoint(j.connectedAnchor)})");
+                    // Logger.Log($"StrutManager({actuator.flightID}): LR->LS({j.anchor}) ({j.connectedAnchor})");
+                    //
+                    // Logger.Log($"StrutManager({actuator.flightID}): local transform: {j.transform.position}; connected local: {j.connectedBody.transform.position}");
+
+                    lr = go.AddComponent<LineRenderer>();
+                    lr.positionCount = 2;
+                    lr.startColor = Color.green;
+                    lr.endColor = lr.startColor;
+                    lr.startWidth = 0.03f;
+                    lr.endWidth = 0.03f;
+                    lr.useWorldSpace = true;
+                    lr.material = new Material(Shader.Find("Particles/Additive"));
+                    LRs[id] = go;
+                }
+
+                lr.SetPosition(0, j.transform.TransformPoint(j.anchor));
+                lr.SetPosition(1, j.connectedBody.transform.TransformPoint(j.connectedAnchor));
+            }
+        }
+
+        private void LRDestroy()
+        {
+            foreach (var lr in LRs)
+            {
+                Logger.Log($"StrutManager({actuator.flightID}):  destroying GO of strut id={lr.Value}");
+                lr.Value.DestroyGameObject();
+            }
+            LRs.Clear();
         }
     }
 }

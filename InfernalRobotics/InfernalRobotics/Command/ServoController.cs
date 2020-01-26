@@ -374,38 +374,40 @@ namespace InfernalRobotics.Command
         private void FixedUpdate()
         {
             //because OnVesselDestroy and OnVesselGoOnRails seem to only work for active vessel I had to build this stupid workaround
-            if(HighLogic.LoadedSceneIsFlight)
+            if (!HighLogic.LoadedSceneIsFlight)
             {
-                if(FlightGlobals.Vessels.Count(v => v.loaded) != loadedVesselCounter)
+                return;
+            }
+
+            if(FlightGlobals.Vessels.Count(v => v.loaded) != loadedVesselCounter)
+            {
+                RebuildServoGroupsFlight ();
+                loadedVesselCounter = FlightGlobals.Vessels.Count(v => v.loaded);
+            }
+
+            if (ServoGroups == null)
+                return;
+
+            //check if all servos stopped running and enable the struts, otherwise disable wheel autostruts
+            var anyActive = new Dictionary<Vessel, bool>();
+
+            foreach(var g in ServoGroups)
+            {
+                if (!anyActive.ContainsKey(g.Vessel))
+                    anyActive.Add(g.Vessel, false);
+                
+                foreach(var s in g.Servos)
                 {
-                    RebuildServoGroupsFlight ();
-                    loadedVesselCounter = FlightGlobals.Vessels.Count(v => v.loaded);
-                }
-
-                if (ServoGroups == null)
-                    return;
-
-                //check if all servos stopped running and enable the struts, otherwise disable wheel autostruts
-                var anyActive = new Dictionary<Vessel, bool>();
-
-                foreach(var g in ServoGroups)
-                {
-                    if (!anyActive.ContainsKey(g.Vessel))
-                        anyActive.Add(g.Vessel, false);
-                    
-                    foreach(var s in g.Servos)
+                    if (s.RawServo.Interpolator.Active)
                     {
-                        if (s.RawServo.Interpolator.Active)
-                        {
-                            anyActive[g.Vessel] = true;
-                            break;
-                        }
+                        anyActive[g.Vessel] = true;
+                        break;
                     }
                 }
-                foreach(var pair in anyActive)
-                {
-                    SetWheelAutoStruts(!pair.Value, pair.Key);
-                }
+            }
+            foreach(var pair in anyActive)
+            {
+                SetWheelAutoStruts(!pair.Value, pair.Key);
             }
         }
 
