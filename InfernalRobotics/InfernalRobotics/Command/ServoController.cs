@@ -286,20 +286,20 @@ namespace InfernalRobotics.Command
             Logger.Log("[ServoController] OnVesselChange finished successfully", Logger.Level.Debug);
         }
 
-        private void OnVesselWasModified(Vessel v)
+        private void OnVesselPartCountModified(Vessel v)
         {
             RebuildServoGroupsFlight ();
         }
 
         private void OnVesselLoaded (Vessel v)
         {
-            Logger.Log("[ServoController] OnVesselLoaded, v=" + v.GetName(), Logger.Level.SuperVerbose);
+            Logger.Log("[ServoController] OnVesselLoaded, v=" + v.GetName(), Logger.Level.Debug);
             RebuildServoGroupsFlight ();
         }
 
         private void OnVesselUnloaded (Vessel v)
         {
-            Logger.Log("[ServoController] OnVesselUnloaded, v=" + v.GetName(), Logger.Level.SuperVerbose);
+            Logger.Log("[ServoController] OnVesselUnloaded, v=" + v.GetName(), Logger.Level.Debug);
             RebuildServoGroupsFlight ();
         }
 
@@ -312,7 +312,7 @@ namespace InfernalRobotics.Command
             if (scene == GameScenes.FLIGHT)
             {
                 GameEvents.onVesselChange.Add(OnVesselChange);
-                GameEvents.onVesselWasModified.Add(OnVesselWasModified);
+                GameEvents.onVesselPartCountChanged.Add(OnVesselPartCountModified);
                 GameEvents.onVesselLoaded.Add (OnVesselLoaded);
                 GameEvents.onVesselDestroy.Add (OnVesselUnloaded);
                 GameEvents.onVesselGoOnRails.Add (OnVesselUnloaded);
@@ -345,7 +345,16 @@ namespace InfernalRobotics.Command
             if (!HighLogic.LoadedSceneIsFlight)
                 return;
 
-            var activeVesselWheels = v.FindPartModulesImplementing<ModuleWheelBase>();
+            /*foreach(var p in v.Parts)
+            {
+                if(!value)
+                {
+                    p.autoStrutMode = Part.AutoStrutMode.Off;
+                    p.UpdateAutoStrut ();
+                }
+            }
+*/
+            /*var activeVesselWheels = v.FindPartModulesImplementing<ModuleWheelBase>();
             foreach(var mwb in activeVesselWheels)
             {
                 if (value)
@@ -358,45 +367,47 @@ namespace InfernalRobotics.Command
 
                 mwb.autoStrut = value;
 
-            }
+            }*/
         }
 
 
         private void FixedUpdate()
         {
             //because OnVesselDestroy and OnVesselGoOnRails seem to only work for active vessel I had to build this stupid workaround
-            if(HighLogic.LoadedSceneIsFlight)
+            if (!HighLogic.LoadedSceneIsFlight)
             {
-                if(FlightGlobals.Vessels.Count(v => v.loaded) != loadedVesselCounter)
+                return;
+            }
+
+            if(FlightGlobals.Vessels.Count(v => v.loaded) != loadedVesselCounter)
+            {
+                RebuildServoGroupsFlight ();
+                loadedVesselCounter = FlightGlobals.Vessels.Count(v => v.loaded);
+            }
+
+            if (ServoGroups == null)
+                return;
+
+            //check if all servos stopped running and enable the struts, otherwise disable wheel autostruts
+            var anyActive = new Dictionary<Vessel, bool>();
+
+            foreach(var g in ServoGroups)
+            {
+                if (!anyActive.ContainsKey(g.Vessel))
+                    anyActive.Add(g.Vessel, false);
+                
+                foreach(var s in g.Servos)
                 {
-                    RebuildServoGroupsFlight ();
-                    loadedVesselCounter = FlightGlobals.Vessels.Count(v => v.loaded);
-                }
-
-                if (ServoGroups == null)
-                    return;
-
-                //check if all servos stopped running and enable the struts, otherwise disable wheel autostruts
-                var anyActive = new Dictionary<Vessel, bool>();
-
-                foreach(var g in ServoGroups)
-                {
-                    if (!anyActive.ContainsKey(g.Vessel))
-                        anyActive.Add(g.Vessel, false);
-                    
-                    foreach(var s in g.Servos)
+                    if (s.RawServo.Interpolator.Active)
                     {
-                        if (s.RawServo.Interpolator.Active)
-                        {
-                            anyActive[g.Vessel] = true;
-                            break;
-                        }
+                        anyActive[g.Vessel] = true;
+                        break;
                     }
                 }
-                foreach(var pair in anyActive)
-                {
-                    SetWheelAutoStruts(!pair.Value, pair.Key);
-                }
+            }
+            foreach(var pair in anyActive)
+            {
+                SetWheelAutoStruts(!pair.Value, pair.Key);
             }
         }
 
@@ -407,7 +418,7 @@ namespace InfernalRobotics.Command
             GameEvents.onVesselChange.Remove(OnVesselChange);
             GameEvents.onPartAttach.Remove(OnPartAttach);
             GameEvents.onPartRemove.Remove(OnPartRemove);
-            GameEvents.onVesselWasModified.Remove(OnVesselWasModified);
+            GameEvents.onVesselWasModified.Remove(OnVesselPartCountModified);
             GameEvents.onEditorShipModified.Remove(OnEditorShipModified);
             GameEvents.onEditorLoad.Remove(OnEditorLoad);
             GameEvents.onEditorRestart.Remove(OnEditorRestart);

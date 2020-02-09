@@ -1,3 +1,12 @@
+Recent development is progressing in IR Next (https://github.com/meirumeiru/InfernalRobotics)
+This fork is targeted mostly at Realism Overhaul users due to some
+incompatibilities and the fact that IR Next stopped supporting KSP 1.6 and
+moved forward, while current RO is bound to 1.6/1.7 for some time.
+
+
+Original Readme:
+===========================================
+
 All credit to Damned Robotics goes to:
 Plugin/lots of stuff : r4m0n
 3dmodels/'textures' : DYJ

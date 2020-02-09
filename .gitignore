@@ -16,3 +16,7 @@ bld/
 *.userprefs
 InfernalRobotics/.vs/
 *.scgdat
+*._*
+*.DS*
+.idea
+*~

@@ -12,7 +12,7 @@ using TweakScale;
 
 namespace InfernalRobotics.Module
 {
-    public class ModuleIRServo : PartModule, IRescalable
+    public class ModuleIRServo : PartModule, IRescalable, IJointLockState
     {
 
         //BEGIN Servo&Utility related KSPFields
@@ -33,7 +33,7 @@ namespace InfernalRobotics.Module
 
         //BEGIN Mechanism related KSPFields
         [KSPField(isPersistant = true)] public bool freeMoving = false;
-        [KSPField(isPersistant = true)] public bool isMotionLock;
+        [KSPField(isPersistant = true)] public bool isMotionLock = false;
         [KSPField(isPersistant = true)] public bool limitTweakable = false;
         [KSPField(isPersistant = true)] public bool limitTweakableFlag = false;
 
@@ -55,7 +55,34 @@ namespace InfernalRobotics.Module
         [KSPField(isPersistant = false)]
         public float jointSpring = 0;
         [KSPField(isPersistant = false)]
-        public float jointDamping = 0; 
+        public float jointDamping = 0;
+
+        [KSPField(isPersistant = true, guiActive = false, guiActiveEditor = true, guiName = "Spring Power", guiFormat = "0.00"), 
+            UI_FloatEdit(minValue = 0.00f, maxValue = 5f, incrementSlide = 0.1f, incrementSmall=0.5f, incrementLarge=1f, scene = UI_Scene.Editor, sigFigs = 2)]
+        public float strutSpring = 0;
+        [KSPField(isPersistant = true, guiActive = false, guiActiveEditor = true, guiName = "Damping", guiFormat = "0.00"), 
+            UI_FloatEdit(minValue = 0.00f, maxValue = 5f, incrementSlide = 0.1f, incrementSmall=0.5f, incrementLarge=1f, scene = UI_Scene.Editor, sigFigs = 2)]
+        public float strutDamping = 0;
+
+        [KSPField(isPersistant = true)]
+        public string hardDamping = "False";
+
+        private bool hasHardDamping = false;
+
+        [KSPField(isPersistant = false, guiName = "ID", guiActive = false)]
+        public uint flight_id;
+
+        [KSPField(isPersistant = false, guiName = "Soft/Current Force", guiActive = false)]
+        public float currentSoftForce = 0f;
+        [KSPField(isPersistant = false, guiName = "Soft/Current Torque", guiActive = false)]
+        public float currentSoftTorque = 0f;
+
+        [KSPField(isPersistant = false, guiName = "Hard/Current Force", guiActive = false)]
+        public float currentHardForce = 0f;
+        [KSPField(isPersistant = false, guiName = "Hard/Current Torque", guiActive = false)]
+        public float currentHardTorque = 0f;
+
+        bool isOnRails = true;
 
         [KSPField(isPersistant = true)] public bool rotateLimits = false;
         [KSPField(isPersistant = true)] public float rotateMax = 360;
@@ -131,7 +158,11 @@ namespace InfernalRobotics.Module
         protected const string ELECTRIC_CHARGE_RESOURCE_NAME = "ElectricCharge";
 
         protected ConfigurableJoint joint;
+        protected ConfigurableJoint savedJoint;
         protected Rigidbody jointRigidBody;
+
+        protected SpringJoint strutJoint;
+        protected SpringJoint strutHvJoint;
 
         protected SoundSource motorSound;
         protected bool failedAttachment = false;
@@ -170,6 +201,8 @@ namespace InfernalRobotics.Module
         protected float lastRealPosition = 0f;
         public bool isStuck = false;
         protected float startPosition = 0f;
+        
+        public StrutManager StrutManager { get; set; }
 
         public ModuleIRServo()
         {
@@ -184,12 +217,17 @@ namespace InfernalRobotics.Module
             JointSetupDone = false;
             forwardKey = "";
             reverseKey = "";
+            StrutManager = new StrutManager(this);
 
             //motorSound = new SoundSource(this.part, "motor");
         }
 
         //BEGIN All KSPEvents&KSPActions
-
+        [KSPEvent (guiActive = true, guiActiveEditor = true, guiName = "Reattach FixedMesh", active = true)]
+        public void ReattachFixedMesh ()
+        {
+            AttachToParent ();
+        }
         [KSPEvent(guiActive = true, guiActiveEditor = true, guiName = "Engage Limits", active = false)]
         public void LimitTweakableToggle()
         {
@@ -226,6 +264,15 @@ namespace InfernalRobotics.Module
         {
             SetLock(!isMotionLock);
         }
+
+        [KSPEvent(guiActive = false, guiActiveEditor = true, guiName = "Hard Damping")]
+        public void HardDampingToggle()
+        {
+            hasHardDamping = !hasHardDamping;
+            Events["HardDampingToggle"].guiName = hasHardDamping ? "Soft Damping" : "Hard Damping";
+            hardDamping = hasHardDamping.ToString();
+        }
+        
         [KSPAction("Toggle Lock")]
         public void MotionLockToggle(KSPActionParam param)
         {
@@ -425,11 +472,138 @@ namespace InfernalRobotics.Module
             SetupMinMaxTweaks();
             ParsePresetPositions();
 
-            Translator.Init(isMotionLock, new Servo(this), Interpolator);
+            StrutManager.SetActuator(part);
+            Translator.Init(
+                isMotionLock, new Servo(this), Interpolator,
+                StrutManager.MessageProcessor.MoveReceived, StrutManager.MessageProcessor.StopReceived);
+
+            GameEvents.onVesselGoOnRails.Add (OnVesselGoOnRails);
+            GameEvents.onVesselGoOffRails.Add (OnVesselGoOffRails);
+            GameEvents.onVesselWasModified.Add (OnVesselWasModified);
+            GameEvents.onPartDie.Add (OnPartDie);
+
+
 
             Logger.Log(string.Format("[OnAwake] End, rotateLimits={0}, minTweak={1}, maxTweak={2}, rotateJoint={0}", rotateLimits, minTweak, maxTweak), Logger.Level.Debug);
         }
-            
+
+        public void onDestroy()
+        {
+            GameEvents.onVesselGoOnRails.Remove (OnVesselGoOnRails);
+            GameEvents.onVesselGoOffRails.Remove (OnVesselGoOffRails);
+            GameEvents.onVesselGoOffRails.Remove (OnVesselWasModified);
+            GameEvents.onPartDie.Remove(OnPartDie);
+        }
+
+        public void OnPartDie(Part p)
+        {
+            if (p != part)
+            {
+                return;
+            }
+            StrutManager.OnPartDie();
+        }
+        
+        public void OnVesselWasModified(Vessel v)
+        {
+            if (v != vessel)
+                return;
+
+            StrutManager.OnVesselWasModified();
+        }
+        
+        public void OnVesselGoOnRails (Vessel v)
+        {
+            if (v != vessel)
+                return;
+
+            Logger.Log ("[OnVesselGoOnRails] Reverting Joint", Logger.Level.Debug);
+
+            part.attachJoint.Joint.angularXDrive = savedJoint.angularXDrive;
+            part.attachJoint.Joint.angularYZDrive = savedJoint.angularYZDrive;
+            part.attachJoint.Joint.xDrive = savedJoint.xDrive;
+            part.attachJoint.Joint.yDrive = savedJoint.yDrive;
+            part.attachJoint.Joint.zDrive = savedJoint.zDrive;
+            part.attachJoint.Joint.enableCollision = false;
+
+            if (joint) 
+            {
+                // lock all movement by default
+                joint.xMotion = ConfigurableJointMotion.Locked;
+                joint.yMotion = ConfigurableJointMotion.Locked;
+                joint.zMotion = ConfigurableJointMotion.Locked;
+                joint.angularXMotion = ConfigurableJointMotion.Locked;
+                joint.angularYMotion = ConfigurableJointMotion.Locked;
+                joint.angularZMotion = ConfigurableJointMotion.Locked;
+            }
+
+            rotationDelta = rotation;
+            translationDelta = translation;
+
+            isOnRails = true;
+        }
+
+
+        public void OnVesselGoOffRails (Vessel v)
+        {
+            if (v != vessel)
+                return;
+
+            JointSetupDone = false;
+
+            try
+            {
+                Logger.Log("[OnVesselGoOffRails] Started for " + part?.name, Logger.Level.Debug);
+
+                Logger.Log("[OnVesselGoOffRails] Rebuilding Attachments", Logger.Level.Debug);
+            }
+            catch (NullReferenceException)
+            {
+                Logger.Log("[OnVesselGoOffRails] got nullref in part.name", Logger.Level.Debug);
+            }
+
+            try
+            {
+                BuildAttachments();
+            }
+            catch (NullReferenceException)
+            {
+                Logger.Log("[OnVesselGoOffRails] got nullref in BuildAttachments", Logger.Level.Debug);
+            }
+
+
+            if (joint) 
+            {
+                Logger.Log ("[OnVesselGoOffRails] Resetting Joint", Logger.Level.Debug);
+                DestroyImmediate (joint);
+            }
+
+            try
+            {
+                SetupJoints();
+            }
+            catch (NullReferenceException)
+            {
+                Logger.Log("[OnVesselGoOffRails] got nullref in SetupJoints", Logger.Level.Debug);
+            }
+
+            try
+            {
+                StrutManager.Init(strutSpring, strutDamping, hasHardDamping);
+            }
+            catch (NullReferenceException)
+            {
+                Logger.Log("[OnVesselGoOffRails] got nullref in StrutManager", Logger.Level.Debug);
+            }
+
+//            if (hasHardDamping)
+//            {
+//                CreateHvStrut();
+//            }
+//            
+            isOnRails = false;
+        }
+
         public override void OnSave(ConfigNode node)
         {
             Logger.Log("[OnSave] Start", Logger.Level.Debug);
@@ -492,10 +666,15 @@ namespace InfernalRobotics.Module
         {
             Logger.Log("[OnLoad] Start", Logger.Level.Debug);
 
+            //base.OnLoad (config);
+
             //save persistent rotation/translation data, because the joint will be initialized at current position.
             rotationDelta = rotation;
             translationDelta = translation;
 
+            hasHardDamping = hardDamping == "True";
+            Events["HardDampingToggle"].guiName = hasHardDamping ? "Soft Damping" : "Hard Damping";
+            
             InitModule();
 
             Logger.Log("[OnLoad] End", Logger.Level.Debug);
@@ -562,17 +741,27 @@ namespace InfernalRobotics.Module
         protected virtual void AttachToParent()
         {
             Transform fix = FixedMeshTransform;
-            //Transform fix = obj;
+            //first revert position to part position
+            if (fix == null || part == null || part.transform == null || part.parent == null)
+            {
+                Logger.Log ("[AttachToParent] part, parent or transform is null", Logger.Level.Debug);
+                return;
+            }
+            
+            fix.position = part.transform.position;
+            fix.rotation = part.transform.rotation;
+
             if (rotateJoint)
             {
-                fix.RotateAround(transform.TransformPoint(rotatePivot), transform.TransformDirection(rotateAxis),
+                fix.RotateAround(part.transform.TransformPoint(rotatePivot), part.transform.TransformDirection(rotateAxis),
                     //(invertSymmetry ? ((part.symmetryCounterparts.Count != 1) ? -1 : 1) : -1) *
-                    -rotation);
+                    -rotationDelta);
             }
             else if (translateJoint)
             {
-                fix.Translate(transform.TransformDirection(translateAxis.normalized)*translation, Space.World);
+                fix.Translate(translateAxis.normalized*translationDelta, Space.Self);
             }
+
             fix.parent = part.parent.transform;
         }
         /// <summary>
@@ -626,10 +815,10 @@ namespace InfernalRobotics.Module
                 AttachToParent ();
             }
 
-            var node = part.findAttachNodeByPart (part.parent);
+            //var node = part.FindAttachNodeByPart (part.parent);
             
-            if(translateJoint && (node == null || !(node.id.Contains(bottomNode) || part.attachMode == AttachModes.SRF_ATTACH)))
-                translateAxis *= -1;
+            //if(translateJoint && (node == null || !(node.id.Contains(bottomNode) || part.attachMode == AttachModes.SRF_ATTACH)))
+            //    translateAxis *= -1;
             
             ReparentFriction(part.transform);
             failedAttachment = false;
@@ -639,8 +828,8 @@ namespace InfernalRobotics.Module
         /// </summary>
         protected void FindTransforms()
         {
-            ModelTransform = part.transform.FindChild("model");
-            RotateModelTransform = ModelTransform.FindChild(rotateModel);
+            ModelTransform = part.transform.Find("model");
+            RotateModelTransform = ModelTransform.Find(rotateModel);
 
             FixedMeshTransform = KSPUtil.FindInPartModel(transform, fixedMesh);
         }
@@ -665,7 +854,9 @@ namespace InfernalRobotics.Module
             if (!float.IsNaN(Position))
                 Interpolator.Position = Position;
 
-            Translator.Init(isMotionLock, new Servo(this), Interpolator);
+            Translator.Init(isMotionLock, new Servo(this), Interpolator, 
+                StrutManager.MessageProcessor.MoveReceived, 
+                StrutManager.MessageProcessor.StopReceived);
 
             if (vessel == null) //or we can check for state==StartState.Editor
             {
@@ -689,7 +880,7 @@ namespace InfernalRobotics.Module
             if (ModelTransform == null)
                 Logger.Log("[MMT] OnStart ModelTransform is null", Logger.Level.Warning);
 
-            BuildAttachments();
+            BuildAttachments(); 
 
             if (limitTweakable)
             {
@@ -700,6 +891,7 @@ namespace InfernalRobotics.Module
             //for some reason it was not necessary for legacy parts, but needed for rework parts.
             SetupMinMaxTweaks();
 
+            hasHardDamping = hardDamping == "True";
             Logger.Log("[MMT] OnStart End, rotateLimits=" + rotateLimits + ", minTweak=" + minTweak + ", maxTweak=" + maxTweak + ", rotateJoint = " + rotateJoint, Logger.Level.Debug);
         }
 
@@ -740,14 +932,16 @@ namespace InfernalRobotics.Module
         /// <returns><c>true</c>, if joint was setup, <c>false</c> otherwise.</returns>
         public virtual bool SetupJoints()
         {
-            if (JointSetupDone)
-                return false;
-
             if (!rotateJoint && !translateJoint || part.attachJoint == null)
             {
                 JointSetupDone = false;
                 return false;
             }
+
+            if (JointSetupDone)
+                return false;
+
+            savedJoint = part.attachJoint.Joint;
 
             // Catch reversed joint
             // Maybe there is a best way to do it?
@@ -935,7 +1129,7 @@ namespace InfernalRobotics.Module
             // Reset default joint drives
             var resetDrv = new JointDrive
             {
-                mode = JointDriveMode.PositionAndVelocity,
+                //mode = JointDriveMode.PositionAndVelocity,
                 positionSpring = 0,
                 positionDamper = 0,
                 maximumForce = 0
@@ -947,6 +1141,8 @@ namespace InfernalRobotics.Module
             part.attachJoint.Joint.yDrive = resetDrv;
             part.attachJoint.Joint.zDrive = resetDrv;
             part.attachJoint.Joint.enableCollision = false;
+
+
 
             JointSetupDone = true;
             return true;
@@ -979,7 +1175,7 @@ namespace InfernalRobotics.Module
         /// </summary>
         /// <returns>The real rotation.</returns>
         public float GetRealRotation()
-        {
+        {            
             Vector3 v1, v2, n;
             if(rotateAxis == Vector3.forward || rotateAxis == Vector3.back)
             {
@@ -1052,6 +1248,11 @@ namespace InfernalRobotics.Module
                 EnforceJointLimits ();
         }
 
+        bool IJointLockState.IsJointUnlocked ()
+        {
+            return true;
+        }
+
         /// <summary>
         /// Called every FixedUpdate, reads next target position and 
         /// updates the rotation/translation correspondingly.
@@ -1062,7 +1263,7 @@ namespace InfernalRobotics.Module
             Interpolator.Update(TimeWarp.fixedDeltaTime);
 
             float targetPos = Interpolator.GetPosition();
-            float currentPos = rotateJoint ? GetRealRotation() : GetRealTranslation();
+            float currentPos = rotateJoint ? rotation : translation;//rotateJoint ? GetRealRotation() : GetRealTranslation();
 
             if (lastRealPosition == 0f)
                 lastRealPosition = currentPos;
@@ -1294,9 +1495,10 @@ namespace InfernalRobotics.Module
                 return electricChargeRequired;
             }
             PartResourceDefinition resDef = PartResourceLibrary.Instance.GetDefinition(ELECTRIC_CHARGE_RESOURCE_NAME);
-            var resources = new List<PartResource>();
-            part.GetConnectedResources(resDef.id, resDef.resourceFlowMode, resources);
-            return resources.Count <= 0 ? 0f : resources.Sum (r => r.amount);
+
+            double amount, maxAmount;
+            part.GetConnectedResourceTotals (resDef.id, resDef.resourceFlowMode, out amount, out maxAmount);
+            return amount;
         }
 
         public void Update()
@@ -1339,9 +1541,11 @@ namespace InfernalRobotics.Module
             if (Math.Abs(lastPosition - this.Position) >= 0.005)
             {
                 part.SendMessage("UpdateShapeWithAnims");
+                part.SendMessage("GeometryPartModuleRebuildMeshData");
                 foreach (var p in part.children)
                 {
                     p.SendMessage("UpdateShapeWithAnims");
+                    p.SendMessage("GeometryPartModuleRebuildMeshData");
                 }
 
                 lastPosition = this.Position;
@@ -1368,6 +1572,9 @@ namespace InfernalRobotics.Module
             {                                  
                 return;
             }
+
+            if (isOnRails)
+                return;
 
             if (minTweak > maxTweak)
             {
@@ -1408,6 +1615,14 @@ namespace InfernalRobotics.Module
                 UpdateJointSettings(currentTorque, currentSpring, currentDamping);*/
 
                 ConsumeElectricCharge();
+
+                currentHardForce = StrutManager.GetCurrentHardForce();
+                currentHardTorque = StrutManager.GetCurrentHardTorque();
+                currentSoftForce = StrutManager.GetCurrentSoftForce();
+                currentSoftTorque = StrutManager.GetCurrentSoftTorque();
+                flight_id = part.flightID;
+                
+                StrutManager.LRDraw();
             }
             
             if (vessel != null) //means flight mode as vessel is null in editor.
@@ -1429,12 +1644,13 @@ namespace InfernalRobotics.Module
             {
                 if (Interpolator.Active && !freeMoving)
                 {
-                    float amountToConsume = electricChargeRequired * TimeWarp.fixedDeltaTime;
+                    float speedModifier = speedTweak > 1 ? speedTweak : 1;
+                    float amountToConsume = electricChargeRequired * TimeWarp.fixedDeltaTime * speedModifier;
 
                     if (UseTorque)
                         amountToConsume = torqueTweak / torqueMax * amountToConsume;
 
-                    part.RequestResource(ELECTRIC_CHARGE_RESOURCE_NAME, amountToConsume);
+                    part.RequestResource(ELECTRIC_CHARGE_RESOURCE_NAME, (double)amountToConsume);
 
                     LastPowerDrawRate = amountToConsume/TimeWarp.fixedDeltaTime;
                 }
@@ -1445,7 +1661,36 @@ namespace InfernalRobotics.Module
             }
         }
 
-
+ 
+//        public void CreateStrutCallback()
+//        {
+//            if (!HighLogic.LoadedSceneIsFlight || strutSpring < 0.01f)
+//            {
+//                return;
+//            }
+//            CreateStrut();
+//            if (hasHardDamping)
+//            {
+//                CreateHvStrut();
+//            }
+//            CreateStrutsInChildren(part.children);
+//        }
+//        
+//
+//        public void DestroyStrutCallback()
+//        {
+//            DestroyStrut();
+//            Logger.Log($"DestroyCallback; strut={strutJoint}, hvStrut={strutHvJoint}, hasHardDamping={hasHardDamping}");
+//
+//            if (hasHardDamping)
+//            {
+//                DestroyHvStrut();
+//            }
+//            DestroyStrutsInChildren(part.children);
+//        }
+        
+       
+        
         public void SetLock(bool isLocked)
         {
             if(!isLocked && failedAttachment)
@@ -1464,8 +1709,9 @@ namespace InfernalRobotics.Module
             Translator.IsMotionLock = isMotionLock;
 
             if (isMotionLock)
+            {
                 Translator.Stop();
-
+            }
         }
 
 
