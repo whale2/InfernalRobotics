@@ -1,7 +1,6 @@
 ﻿using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.EventSystems;
-using System;
 using KSP.UI;
 
 namespace InfernalRobotics.Gui
@@ -89,7 +88,11 @@ namespace InfernalRobotics.Gui
                 var panelRectTransform = tooltipPanel.transform as RectTransform;
 
                 Vector2 localPointerPosition;
-                if (RectTransformUtility.ScreenPointToLocalPointInRectangle(tooltipPanel.transform.parent as RectTransform, Input.mousePosition, UIMasterController.Instance.uiCamera, out localPointerPosition))
+                if (RectTransformUtility.ScreenPointToLocalPointInRectangle(
+                    tooltipPanel.transform.parent as RectTransform, 
+                    Input.mousePosition, 
+                    UIMasterController.Instance.uiCamera, 
+                    out localPointerPosition))
                 {
                     panelRectTransform.localPosition = localPointerPosition - tooltipOffset;
                 }

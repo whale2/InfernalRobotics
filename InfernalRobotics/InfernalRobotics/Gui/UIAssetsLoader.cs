@@ -1,5 +1,4 @@
-﻿using System;
-using System.IO;
+﻿using System.IO;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
@@ -37,15 +36,14 @@ namespace InfernalRobotics.Gui
         {
             while (!Caching.ready)
                 yield return null;
-            using (WWW www = WWW.LoadFromCacheOrDownload(location, 1))
+            if (IRAssetBundle == null)
             {
-                yield return www;
-                IRAssetBundle = www.assetBundle;
-
-                LoadBundleAssets();
-
-                //IRAssetBundle.Unload(false);
+                IRAssetBundle = AssetBundle.LoadFromFile(location);
             }
+
+            LoadBundleAssets();
+
+            //IRAssetBundle.Unload(false);
         }
         
         private void LoadBundleAssets()
@@ -160,7 +158,7 @@ namespace InfernalRobotics.Gui
                 return;
 
             var assemblyFile = Assembly.GetExecutingAssembly().Location;
-            var bundlePath = "file://" + assemblyFile.Replace(new FileInfo(assemblyFile).Name, "").Replace("\\","/") + "../AssetBundles/";
+            var bundlePath = assemblyFile.Replace(new FileInfo(assemblyFile).Name, "").Replace("\\","/") + "../AssetBundles/";
             //var filePath = assemblyFile.Replace(new FileInfo(assemblyFile).Name, "") + "../AssetBundles/";
 
             Logger.Log("Loading bundles from BundlePath: " + bundlePath, Logger.Level.Debug);

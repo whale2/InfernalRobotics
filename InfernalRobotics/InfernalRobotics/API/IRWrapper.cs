@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using UnityEngine;
 
 // TODO: Change this namespace to something specific to your plugin here.
 namespace InfernalRobotics.API
@@ -700,7 +701,7 @@ namespace InfernalRobotics.API
                 string.Format ("{0},{2}-{3},{1}", DateTime.Now, message, assemblyName, declaringType.Name) :
                 string.Format ("{0},{2}-NO-DECLARE,{1}", DateTime.Now, message, assemblyName);
 
-            UnityEngine.Debug.Log (strMessageLine);
+            Debug.Log (strMessageLine);
         }
 
         #endregion Logging Stuff
