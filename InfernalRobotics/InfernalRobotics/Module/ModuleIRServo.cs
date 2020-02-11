@@ -1,12 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
 using InfernalRobotics.Command;
 using InfernalRobotics.Control.Servo;
 using InfernalRobotics.Effects;
 using InfernalRobotics.Gui;
-using KSP.IO;
 using UnityEngine;
 using TweakScale;
 
@@ -160,9 +158,6 @@ namespace InfernalRobotics.Module
         protected ConfigurableJoint joint;
         protected ConfigurableJoint savedJoint;
         protected Rigidbody jointRigidBody;
-
-        protected SpringJoint strutJoint;
-        protected SpringJoint strutHvJoint;
 
         protected SoundSource motorSound;
         protected bool failedAttachment = false;
@@ -972,8 +967,8 @@ namespace InfernalRobotics.Module
             joint.angularYMotion = ConfigurableJointMotion.Locked;
             joint.angularZMotion = ConfigurableJointMotion.Locked;
 
-            joint.projectionDistance = 0f;
-            joint.projectionAngle = 0f;
+            joint.projectionDistance = 0.01f;
+            joint.projectionAngle = 0.01f;
             joint.projectionMode = JointProjectionMode.PositionAndRotation;
 
             // Copy drives
@@ -1000,7 +995,7 @@ namespace InfernalRobotics.Module
                 jointRigidBody.transform.InverseTransformDirection(joint.connectedBody.transform.up); //y axis
 
             joint.enableCollision = false;
-
+           
             if (translateJoint)
             {
                 //we need to get joint's translation along the translate axis

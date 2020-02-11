@@ -976,7 +976,6 @@ namespace InfernalRobotics.Gui
             var toFlightModeButton = editorFooterButtons.Find("ToFlightModeButton")?.GetComponent<Button>();
             if (toFlightModeButton != null)
             {
-
                 toFlightModeButton.onClick.AddListener(() => closeButton.GetComponent<Button>().onClick.Invoke());
                 toFlightModeButton.gameObject.SetActive(guiFlightEditorWindowOpen);
             }
