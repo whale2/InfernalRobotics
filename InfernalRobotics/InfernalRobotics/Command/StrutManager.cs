@@ -140,7 +140,7 @@ namespace InfernalRobotics.Command
             // something has changed
             // destroy old strut, try to create new strut
             Logger.Log($"StrutManager({actuator.flightID}): vessel modified");
-            
+            // TODO: Check if the actuator is still valid and belongs to this ship!
             MessageProcessor.FindNeighbors(actuator);
             //Logger.Log($"StrutManager({actuator.flightID}): vessel modified; start.v={strutEnd?.vessel.name}, end.v={strutEnd?.vessel.name}, hv.v={hvPart?.vessel.name}");
 

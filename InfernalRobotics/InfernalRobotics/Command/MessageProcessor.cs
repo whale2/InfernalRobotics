@@ -146,11 +146,12 @@ namespace InfernalRobotics.Command
         {
             List<MessageProcessor> neighborsList = new List<MessageProcessor>();
             // Find closest IR parts up the tree
-            foreach (Part p in part.children)
+            for(int i = 0; i < part.children.Count; i ++)
             {
-                Logger.Log($"StrutManager({actuator.flightID}): looking for neighbors upward: {p?.name}");
+                Part p = part.children[0];
                 try
                 {
+                    Logger.Log($"StrutManager({actuator.flightID}): looking for neighbors upward: {p?.name}");
                     if (p.Modules.Contains(StrutManager.muMechToggle))
                     {
                         neighborsList.Add(((ModuleIRServo) (p.Modules[StrutManager.muMechToggle])).StrutManager.MessageProcessor);
@@ -158,7 +159,8 @@ namespace InfernalRobotics.Command
                 }
                 catch (NullReferenceException)
                 {
-                    Logger.Log($"StrutManager({actuator.flightID}): FindNeighborsUpward: got nullref for part: {p?.name}");
+                    var name = p == null ? "<null part>" : p.name;
+                    Logger.Log($"StrutManager({actuator.flightID}): FindNeighborsUpward: got nullref for part: {name}");
                 }
             }
 

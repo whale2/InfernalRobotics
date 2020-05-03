@@ -1,9 +1,9 @@
 {
-  "NAME": "Infernal Robots",
+  "NAME": "Infernal RO-Robots",
   "URL": "https://raw.githubusercontent.com/whale2/InfernalRobotics/master/GameData/MagicSmokeIndustries/InfernalRobotics.version",
   "VERSION": {
     "MAJOR": 2,
-    "MINOR": 2,
+    "MINOR": 3,
     "PATCH": 0
   },
   "KSP_VERSION": {

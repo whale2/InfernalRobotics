@@ -12,7 +12,6 @@ namespace InfernalRobotics.Module
 {
     public class ModuleIRServo : PartModule, IRescalable, IJointLockState
     {
-
         //BEGIN Servo&Utility related KSPFields
         [KSPField(isPersistant = true)] public string servoName = "";
 
@@ -64,8 +63,11 @@ namespace InfernalRobotics.Module
 
         [KSPField(isPersistant = true)]
         public string hardDamping = "False";
-
         private bool hasHardDamping = false;
+
+        [KSPField(isPersistant = true)]
+        public string reinforced = "False";
+        private bool isReinforced = false;
 
         [KSPField(isPersistant = false, guiName = "ID", guiActive = false)]
         public uint flight_id;
@@ -79,6 +81,9 @@ namespace InfernalRobotics.Module
         public float currentHardForce = 0f;
         [KSPField(isPersistant = false, guiName = "Hard/Current Torque", guiActive = false)]
         public float currentHardTorque = 0f;
+
+        [KSPField]
+        private bool drawJoints = false;
 
         bool isOnRails = true;
 
@@ -158,6 +163,9 @@ namespace InfernalRobotics.Module
         protected ConfigurableJoint joint;
         protected ConfigurableJoint savedJoint;
         protected Rigidbody jointRigidBody;
+
+        protected HingeJoint secondaryJoint;
+        protected Part connectedPart;
 
         protected SoundSource motorSound;
         protected bool failedAttachment = false;
@@ -260,12 +268,20 @@ namespace InfernalRobotics.Module
             SetLock(!isMotionLock);
         }
 
-        [KSPEvent(guiActive = false, guiActiveEditor = true, guiName = "Hard Damping")]
+        [KSPEvent(guiActive = false, guiActiveEditor = true, guiName = "Damping: Soft")]
         public void HardDampingToggle()
         {
             hasHardDamping = !hasHardDamping;
-            Events["HardDampingToggle"].guiName = hasHardDamping ? "Soft Damping" : "Hard Damping";
+            Events["HardDampingToggle"].guiName = hasHardDamping ? "Damping: Hard" : "Damping: Soft";
             hardDamping = hasHardDamping.ToString();
+        }
+
+        [KSPEvent(guiActive = false, guiActiveEditor = false, guiName = "Joint type: Normal")]
+        public void ReinforceToggle()
+        {
+            isReinforced = !isReinforced;
+            Events["ReinforceToggle"].guiName = isReinforced ? "Joint type: Reinforced" : "Joint type: Normal";
+            reinforced = isReinforced.ToString();
         }
         
         [KSPAction("Toggle Lock")]
@@ -477,12 +493,12 @@ namespace InfernalRobotics.Module
             GameEvents.onVesselWasModified.Add (OnVesselWasModified);
             GameEvents.onPartDie.Add (OnPartDie);
 
-
+            Events["ReinforceToggle"].guiActiveEditor = rotateJoint;
 
             Logger.Log(string.Format("[OnAwake] End, rotateLimits={0}, minTweak={1}, maxTweak={2}, rotateJoint={0}", rotateLimits, minTweak, maxTweak), Logger.Level.Debug);
         }
 
-        public void onDestroy()
+        public void OnDestroy()
         {
             GameEvents.onVesselGoOnRails.Remove (OnVesselGoOnRails);
             GameEvents.onVesselGoOffRails.Remove (OnVesselGoOffRails);
@@ -492,11 +508,25 @@ namespace InfernalRobotics.Module
 
         public void OnPartDie(Part p)
         {
+            CheckSecondaryJoint(p);
             if (p != part)
             {
                 return;
             }
             StrutManager.OnPartDie();
+        }
+
+        protected void CheckSecondaryJoint(Part p)
+        {
+            if (secondaryJoint == null)
+            {
+                return;
+            }
+
+            if (connectedPart == part || part.parent == p )
+            {
+                DestroyImmediate(secondaryJoint);
+            }
         }
         
         public void OnVesselWasModified(Vessel v)
@@ -505,6 +535,10 @@ namespace InfernalRobotics.Module
                 return;
 
             StrutManager.OnVesselWasModified();
+            if (secondaryJoint != null && connectedPart.vessel != part.vessel)
+            {
+                DestroyImmediate(secondaryJoint);
+            }
         }
         
         public void OnVesselGoOnRails (Vessel v)
@@ -668,7 +702,10 @@ namespace InfernalRobotics.Module
             translationDelta = translation;
 
             hasHardDamping = hardDamping == "True";
-            Events["HardDampingToggle"].guiName = hasHardDamping ? "Soft Damping" : "Hard Damping";
+            isReinforced = reinforced == "True";
+            Events["HardDampingToggle"].guiName = hasHardDamping ? "Damping: Hard" : "Damping: Soft";
+            Events["ReinforceToggle"].guiActiveEditor = rotateJoint;
+            Events["ReinforceToggle"].guiName = isReinforced ? "Joint type: Reinforced" : "Joint type: Normal";
             
             InitModule();
 
@@ -887,6 +924,8 @@ namespace InfernalRobotics.Module
             SetupMinMaxTweaks();
 
             hasHardDamping = hardDamping == "True";
+            isReinforced = reinforced == "True";
+
             Logger.Log("[MMT] OnStart End, rotateLimits=" + rotateLimits + ", minTweak=" + minTweak + ", maxTweak=" + maxTweak + ", rotateJoint = " + rotateJoint, Logger.Level.Debug);
         }
 
@@ -949,7 +988,6 @@ namespace InfernalRobotics.Module
             {
                 joint = part.attachJoint.Joint.GetComponent<Rigidbody> ().gameObject.AddComponent<ConfigurableJoint>();
                 joint.connectedBody = part.attachJoint.Joint.connectedBody;
-
             }
 
             joint.breakForce = 1e15f;
@@ -1058,7 +1096,8 @@ namespace InfernalRobotics.Module
 
             if (rotateJoint)
             {
-                startPosition = to180(AngleSigned(jointRigidBody.transform.up, joint.connectedBody.transform.up, joint.connectedBody.transform.right));
+                startPosition = to180(
+                    AngleSigned(jointRigidBody.transform.up, joint.connectedBody.transform.up, joint.connectedBody.transform.right));
 
                 joint.rotationDriveMode = RotationDriveMode.XYAndZ;
                 joint.angularXMotion = ConfigurableJointMotion.Free;
@@ -1137,10 +1176,55 @@ namespace InfernalRobotics.Module
             part.attachJoint.Joint.zDrive = resetDrv;
             part.attachJoint.Joint.enableCollision = false;
 
-
-
+            if (isReinforced)
+            {
+                SetUpSecondaryJoint();
+            }
             JointSetupDone = true;
             return true;
+        }
+
+        // Set up free moving joint between parts, attached to the robotic joint - rotational joints only
+        private void SetUpSecondaryJoint()
+        {
+            // Only rotational joints so far
+            if (!rotateJoint || part.parent == null || part.children.Count < 1)
+            {
+                return;
+            }
+
+            Logger.Log($"IR({part.flightID}): setting up secondary joint; parent={part.parent.name}");
+
+            // So far attaching only the part, connected via node
+            connectedPart = part.children[0]; // TODO: Account for more children
+            if (connectedPart == null)
+            {
+                return;
+            }
+            // Connected part will hold the joint
+
+            Logger.Log($"IR({part.flightID}): connected part={connectedPart.name}, id={connectedPart.flightID}");
+            // We need to determine hinge axis and position
+            // Rotation should be just the rotation axis
+            // Position seems to be irrelevant, but common sense says, it'd be better if
+            // it would be the projection of the distance between actuator and connected part on
+            // the rotation axis
+
+            secondaryJoint = connectedPart.gameObject.AddComponent<HingeJoint>();
+            Vector3 distance = part.transform.InverseTransformPoint(connectedPart.transform.position);
+            Vector3 projection = Vector3.Project(distance,rotateAxis);
+            secondaryJoint.anchor = connectedPart.transform.InverseTransformPoint(
+                part.transform.TransformPoint(projection));
+            secondaryJoint.axis = connectedPart.transform.InverseTransformDirection(
+                part.transform.TransformDirection(rotateAxis));
+            secondaryJoint.connectedBody = part.parent.rb;
+            secondaryJoint.breakForce = 1e15f;
+            secondaryJoint.breakTorque = 1e15f;
+
+            // Logger.Log($"IR({part.flightID}): distance: {distance}, magnitude: {distance.magnitude}, axisDirection: {rotateAxis * distance.magnitude}");
+            // Logger.Log($"IR({part.flightID}): projection: {projection}");
+            // Logger.Log($"IR({part.flightID}): anchor: {connectedPart.transform.InverseTransformPoint(part.transform.TransformPoint(projection))}");
+            // Logger.Log($"IR({part.flightID}): local axis: {connectedPart.transform.InverseTransformDirection(part.transform.TransformDirection(rotateAxis))}");
         }
 
         public float to180(float v)
@@ -1618,6 +1702,7 @@ namespace InfernalRobotics.Module
                 flight_id = part.flightID;
                 
                 StrutManager.LRDraw();
+                LRDraw();
             }
             
             if (vessel != null) //means flight mode as vessel is null in editor.
@@ -1859,5 +1944,42 @@ namespace InfernalRobotics.Module
             }
         }
 
+        private LineRenderer lr = null;
+        private LineRenderer lr2 = null;
+        internal void LRDraw()
+        {
+            if (!drawJoints)
+            {
+                return;
+            }
+
+            if (lr == null)
+            {
+                lr = part.parent.gameObject.AddComponent<LineRenderer>();
+                lr.positionCount = 2;
+                lr.material = new Material(Shader.Find("Legacy Shaders/Particles/Additive"));
+                lr.useWorldSpace = true;
+                lr.startColor = Color.red;
+                lr.endColor = lr.startColor;
+                lr.startWidth = 0.03f;
+                lr.endWidth = 0.03f;
+
+                // lr2 = part.gameObject.AddComponent<LineRenderer>();
+                // lr2.positionCount = 2;
+                // lr2.material = new Material(Shader.Find("Legacy Shaders/Particles/Additive"));
+                // lr2.useWorldSpace = true;
+                // lr2.startColor = Color.blue;
+                // lr2.endColor = lr2.startColor;
+                // lr2.startWidth = 0.03f;
+                // lr2.endWidth = 0.03f;
+
+            }
+
+            lr.SetPosition(0, connectedPart.transform.TransformPoint(secondaryJoint.anchor));
+            lr.SetPosition(1, connectedPart.transform.TransformPoint(secondaryJoint.anchor + secondaryJoint.axis));
+
+            //lr2.SetPosition(0, joint.gameObject.transform.TransformPoint(joint.anchor));
+            //lr2.SetPosition(1, joint.connectedBody.transform.TransformPoint(joint.connectedAnchor));
+        }
     }
 }
