@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using InfernalRobotics.Command;
@@ -164,8 +165,8 @@ namespace InfernalRobotics.Module
         protected ConfigurableJoint savedJoint;
         protected Rigidbody jointRigidBody;
 
-        protected HingeJoint secondaryJoint;
-        protected Part connectedPart;
+        protected Dictionary<Part, HingeJoint> secondaryJoint = null;
+        Dictionary<uint, float> initialAngle = null;
 
         protected SoundSource motorSound;
         protected bool failedAttachment = false;
@@ -523,9 +524,18 @@ namespace InfernalRobotics.Module
                 return;
             }
 
-            if (connectedPart == part || part.parent == p )
+            if (secondaryJoint.ContainsKey(p))
             {
-                DestroyImmediate(secondaryJoint);
+                Destroy(secondaryJoint[p]);
+            }
+
+            if (part.parent == p || part == p)
+            {
+                foreach (var hingedPart in secondaryJoint.Keys)
+                {
+                    Destroy(secondaryJoint[hingedPart]);
+                    secondaryJoint.Remove(hingedPart);
+                }
             }
         }
         
@@ -535,9 +545,18 @@ namespace InfernalRobotics.Module
                 return;
 
             StrutManager.OnVesselWasModified();
-            if (secondaryJoint != null && connectedPart.vessel != part.vessel)
+            if (secondaryJoint == null)
             {
-                DestroyImmediate(secondaryJoint);
+                return;
+            }
+
+            foreach (var hingedPart in secondaryJoint.Keys)
+            {
+                if (hingedPart.vessel != part.vessel)
+                {
+                    Destroy(secondaryJoint[hingedPart]);
+                    secondaryJoint.Remove(hingedPart);
+                }
             }
         }
         
@@ -1195,14 +1214,31 @@ namespace InfernalRobotics.Module
 
             Logger.Log($"IR({part.flightID}): setting up secondary joint; parent={part.parent.name}");
 
-            // So far attaching only the part, connected via node
-            connectedPart = part.children[0]; // TODO: Account for more children
-            if (connectedPart == null)
+            if (secondaryJoint == null)
+            {
+                secondaryJoint = new Dictionary<Part, HingeJoint>();
+                initialAngle = new Dictionary<uint, float>();
+            }
+
+            for (int i = 0; i < part.children.Count; i++)
+            {
+                // Connected part will hold the joint
+                CreateHinge(part.children[i]);
+            }
+
+            // Logger.Log($"IR({part.flightID}): distance: {distance}, magnitude: {distance.magnitude}, axisDirection: {rotateAxis * distance.magnitude}");
+            // Logger.Log($"IR({part.flightID}): projection: {projection}");
+            // Logger.Log($"IR({part.flightID}): anchor: {connectedPart.transform.InverseTransformPoint(part.transform.TransformPoint(projection))}");
+            // Logger.Log($"IR({part.flightID}): local axis: {connectedPart.transform.InverseTransformDirection(part.transform.TransformDirection(rotateAxis))}");
+        }
+
+        private void CreateHinge(Part connectedPart)
+        {
+            // Don't create hinges for struts (TODO: Add blacklist)
+            if (connectedPart.Modules.Contains("CModuleStrut"))
             {
                 return;
             }
-            // Connected part will hold the joint
-
             Logger.Log($"IR({part.flightID}): connected part={connectedPart.name}, id={connectedPart.flightID}");
             // We need to determine hinge axis and position
             // Rotation should be just the rotation axis
@@ -1210,21 +1246,19 @@ namespace InfernalRobotics.Module
             // it would be the projection of the distance between actuator and connected part on
             // the rotation axis
 
-            secondaryJoint = connectedPart.gameObject.AddComponent<HingeJoint>();
+            HingeJoint hingeJoint = connectedPart.gameObject.AddComponent<HingeJoint>();
             Vector3 distance = part.transform.InverseTransformPoint(connectedPart.transform.position);
             Vector3 projection = Vector3.Project(distance,rotateAxis);
-            secondaryJoint.anchor = connectedPart.transform.InverseTransformPoint(
+            hingeJoint.anchor = connectedPart.transform.InverseTransformPoint(
                 part.transform.TransformPoint(projection));
-            secondaryJoint.axis = connectedPart.transform.InverseTransformDirection(
+            hingeJoint.axis = connectedPart.transform.InverseTransformDirection(
                 part.transform.TransformDirection(rotateAxis));
-            secondaryJoint.connectedBody = part.parent.rb;
-            secondaryJoint.breakForce = 1e15f;
-            secondaryJoint.breakTorque = 1e15f;
+            hingeJoint.connectedBody = part.parent.rb;
+            hingeJoint.breakForce = 1e10f;
+            hingeJoint.breakTorque = 1e10f;
+            secondaryJoint[connectedPart] = hingeJoint;
 
-            // Logger.Log($"IR({part.flightID}): distance: {distance}, magnitude: {distance.magnitude}, axisDirection: {rotateAxis * distance.magnitude}");
-            // Logger.Log($"IR({part.flightID}): projection: {projection}");
-            // Logger.Log($"IR({part.flightID}): anchor: {connectedPart.transform.InverseTransformPoint(part.transform.TransformPoint(projection))}");
-            // Logger.Log($"IR({part.flightID}): local axis: {connectedPart.transform.InverseTransformDirection(part.transform.TransformDirection(rotateAxis))}");
+            initialAngle[connectedPart.flightID] = rotation;
         }
 
         public float to180(float v)
@@ -1792,9 +1826,45 @@ namespace InfernalRobotics.Module
             {
                 Translator.Stop();
             }
+            if (secondaryJoint != null)
+            {
+                if (isMotionLock)
+                {
+                    Logger.Log ($"Locking hinge joints");
+                    StartCoroutine(WaitAndLockHinges());
+                }
+                else
+                {
+                    Logger.Log ($"Unlocking hinge joints");
+                    foreach (var hingeJoint in secondaryJoint.Values)
+                    {
+                        hingeJoint.useLimits = false;
+                    }
+                }
+            }
         }
 
+        public IEnumerator WaitAndLockHinges()
+        {
+            yield return new WaitForSeconds(1);
+            float tolerance = 0.2f;
+            foreach (var p in secondaryJoint.Keys)
+            {
+                HingeJoint hingeJoint = secondaryJoint[p];
+                Logger.Log ($"Locking part {p.name} at {rotation} - {initialAngle[p.flightID]}");
 
+                JointLimits limits = hingeJoint.limits;
+                limits.min = rotation - tolerance - initialAngle[p.flightID];
+                limits.max = rotation + tolerance - initialAngle[p.flightID];
+
+                limits.bounciness = 0.6f;
+                limits.bounceMinVelocity = 1;
+                hingeJoint.limits = limits;
+                hingeJoint.useLimits = true;
+                //Logger.Log ($"Hinge joint; partId={p.flightID}; angle: {limits.min} : {limits.max}");
+
+            }
+        }
 
         /// <summary>
         /// Moves to the next preset. 
@@ -1975,8 +2045,8 @@ namespace InfernalRobotics.Module
 
             }
 
-            lr.SetPosition(0, connectedPart.transform.TransformPoint(secondaryJoint.anchor));
-            lr.SetPosition(1, connectedPart.transform.TransformPoint(secondaryJoint.anchor + secondaryJoint.axis));
+            //lr.SetPosition(0, connectedPart.transform.TransformPoint(secondaryJoint.anchor));
+            //lr.SetPosition(1, connectedPart.transform.TransformPoint(secondaryJoint.anchor + secondaryJoint.axis));
 
             //lr2.SetPosition(0, joint.gameObject.transform.TransformPoint(joint.anchor));
             //lr2.SetPosition(1, joint.connectedBody.transform.TransformPoint(joint.connectedAnchor));

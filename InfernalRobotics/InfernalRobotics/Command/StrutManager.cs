@@ -434,6 +434,10 @@ namespace InfernalRobotics.Command
 
         private int _LooseSingleStrut(SpringJoint strut)
         {
+            if (strut == null)
+            {
+                return 1;
+            }
             if (strut.spring > 1f)
             {
                 strut.spring -= springForce / 10;

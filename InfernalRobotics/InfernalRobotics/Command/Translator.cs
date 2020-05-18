@@ -44,6 +44,7 @@ namespace InfernalRobotics.Command
         // conversion data
         public bool IsMotionLock { get; set; }
 
+        private bool stopSignalled = false;
         public float GetSpeedUnit()
         {
             if (servo == null)
@@ -60,9 +61,10 @@ namespace InfernalRobotics.Command
         /// <param name="speed">Speed as multiplier</param>
         public void Move(float pos, float speed)
         {
-            if (beforeStart != null)
+            if (beforeStart != null && !IsMotionLock && (pos > 0 || speed > 0))
             {
                 beforeStart();
+                stopSignalled = false;
             }
             if (!interpolator.Active)
                 servo.Mechanism.Reconfigure();
@@ -76,7 +78,12 @@ namespace InfernalRobotics.Command
 
         public void MoveIncremental(float posDelta, float speed)
         {
-            beforeStart?.Invoke();
+            if (beforeStart != null && !IsMotionLock && posDelta > 0 && speed > 0)
+            {
+                beforeStart();
+                stopSignalled = false;
+            }
+            //beforeStart?.Invoke();
             if (!interpolator.Active)
                 servo.Mechanism.Reconfigure();
 
@@ -87,9 +94,10 @@ namespace InfernalRobotics.Command
         public void Stop()
         {
             Move(0, 0);
-            if (onStop != null && !IsMoving())
+            if (onStop != null && !IsMoving() && !stopSignalled)
             {
                 onStop();
+                stopSignalled = true;
             }
         }
 
